@@ -21,13 +21,22 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   TimeSlot? _selectedSlot;
   String _paymentMethod = 'UPI';
   bool _agreedToTerms = false;
+  DateTime _selectedDate = DateTime.now();
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<OrderProvider>().loadTimeSlots();
+      context.read<OrderProvider>().loadTimeSlots(date: _selectedDate);
     });
+  }
+
+  void _selectDate(DateTime date) {
+    setState(() {
+      _selectedDate = DateTime(date.year, date.month, date.day);
+      _selectedSlot = null;
+    });
+    context.read<OrderProvider>().loadTimeSlots(date: _selectedDate);
   }
 
   Future<void> _placeOrder() async {
@@ -172,6 +181,44 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             ),
             const SizedBox(height: 16),
 
+            // Advance booking: choose the day
+            const Text('Select Booking Day *',
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: _DateOptionChip(
+                    icon: Icons.today,
+                    label: 'Today',
+                    subtitle: _formattedDay(DateTime.now()),
+                    selected: _isSameDay(_selectedDate, DateTime.now()),
+                    onTap: () => _selectDate(DateTime.now()),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _DateOptionChip(
+                    icon: Icons.event,
+                    label: 'Tomorrow',
+                    subtitle: _formattedDay(
+                        DateTime.now().add(const Duration(days: 1))),
+                    selected: _isSameDay(
+                        _selectedDate, DateTime.now().add(const Duration(days: 1))),
+                    onTap: () => _selectDate(
+                        DateTime.now().add(const Duration(days: 1))),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Book a slot now and pick up on the selected day — up to tomorrow.',
+              style: TextStyle(
+                  fontSize: 11, color: AppColors.textSecondary),
+            ),
+            const SizedBox(height: 16),
+
             // Time slot picker
             const Text('Select Pickup Time Slot *',
                 style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
@@ -248,6 +295,79 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
               ),
             ),
             const SizedBox(height: 32),
+          ],
+        ),
+      ),
+    );
+  }
+
+  bool _isSameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  String _formattedDay(DateTime date) {
+    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${days[date.weekday - 1]}, ${date.day} ${months[date.month - 1]}';
+  }
+}
+
+class _DateOptionChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String subtitle;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _DateOptionChip({
+    required this.icon,
+    required this.label,
+    required this.subtitle,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.primary.withValues(alpha: 0.08) : Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selected ? AppColors.primary : Colors.grey.shade300,
+            width: selected ? 2 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: selected ? AppColors.primary : AppColors.textSecondary, size: 24),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontWeight: selected ? FontWeight.bold : FontWeight.w600,
+                      color: selected ? AppColors.primary : AppColors.textPrimary,
+                      fontSize: 14,
+                    ),
+                  ),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (selected) const Icon(Icons.check_circle, color: AppColors.primary, size: 18),
           ],
         ),
       ),

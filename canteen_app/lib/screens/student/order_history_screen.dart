@@ -152,7 +152,7 @@ class _OrderCard extends StatelessWidget {
                     ),
                   ),
                   const Spacer(),
-                  Text('#${order.id.substring(0, 10)}...',
+                  Text('#${order.displayNumber}',
                       style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
                 ],
               ),

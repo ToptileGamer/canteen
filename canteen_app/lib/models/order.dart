@@ -41,6 +41,7 @@ class OrderItem {
 
 class Order {
   final String id;
+  final String orderNumber;
   final String userId;
   final List<OrderItem> items;
   final double totalAmount;
@@ -52,6 +53,7 @@ class Order {
 
   const Order({
     required this.id,
+    this.orderNumber = '',
     required this.userId,
     required this.items,
     required this.totalAmount,
@@ -62,9 +64,12 @@ class Order {
     required this.transactionId,
   });
 
+  String get displayNumber => orderNumber.isNotEmpty ? orderNumber : id;
+
   Order copyWith({OrderStatus? status}) {
     return Order(
       id: id,
+      orderNumber: orderNumber,
       userId: userId,
       items: items,
       totalAmount: totalAmount,
@@ -78,7 +83,12 @@ class Order {
 
   String get pickupSlotLabel {
     final f = _formatTime;
-    return '${f(pickupStartTime)} - ${f(pickupEndTime)}';
+    final now = DateTime.now();
+    final isToday = pickupStartTime.year == now.year &&
+        pickupStartTime.month == now.month &&
+        pickupStartTime.day == now.day;
+    final dayPart = isToday ? '' : '${_formatDay(pickupStartTime)} · ';
+    return '$dayPart${f(pickupStartTime)} - ${f(pickupEndTime)}';
   }
 
   static String _formatTime(DateTime dt) {
@@ -88,8 +98,15 @@ class Order {
     return '$hour:$min $ampm';
   }
 
+  static String _formatDay(DateTime dt) {
+    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${days[dt.weekday - 1]}, ${dt.day} ${months[dt.month - 1]}';
+  }
+
   Map<String, dynamic> toJson() => {
         'id': id,
+        'orderNumber': orderNumber,
         'userId': userId,
         'items': items.map((i) => i.toJson()).toList(),
         'totalAmount': totalAmount,
@@ -102,6 +119,7 @@ class Order {
 
   factory Order.fromJson(Map<String, dynamic> json) => Order(
         id: json['id'],
+        orderNumber: json['orderNumber'] ?? json['id'],
         userId: json['userId'],
         items: (json['items'] as List).map((i) => OrderItem.fromJson(i)).toList(),
         totalAmount: (json['totalAmount'] as num).toDouble(),

@@ -1,4 +1,6 @@
 import 'package:flutter/foundation.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../config/app_config.dart';
 import '../models/menu_item.dart';
 import '../services/menu_service.dart';
 
@@ -8,6 +10,7 @@ class MenuProvider extends ChangeNotifier {
   List<MenuItem> _menuItems = [];
   FoodCategory _selectedCategory = FoodCategory.breakfast;
   bool _isLoading = false;
+  RealtimeChannel? _channel;
 
   List<MenuItem> get menuItems => _menuItems;
   List<MenuItem> get filteredItems =>
@@ -19,12 +22,40 @@ class MenuProvider extends ChangeNotifier {
     _isLoading = true;
     notifyListeners();
 
-    // Simulate network delay
-    await Future.delayed(const Duration(milliseconds: 300));
+    await _menuService.loadFromBackend();
     _menuItems = _menuService.getMenuItems();
 
     _isLoading = false;
     notifyListeners();
+  }
+
+  /// Subscribes to menu changes so availability/price edits made by staff
+  /// appear instantly on every device.
+  void subscribeRealtime() {
+    unsubscribeRealtime();
+    try {
+      final supabase = AppConfig.supabase;
+      _channel = supabase
+          .channel('menu_items')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'menu_items',
+            callback: (_) {
+              loadMenu();
+            },
+          )
+          .subscribe();
+    } catch (_) {
+      // realtime unavailable (e.g. not initialized in tests)
+    }
+  }
+
+  void unsubscribeRealtime() {
+    try {
+      _channel?.unsubscribe();
+    } catch (_) {}
+    _channel = null;
   }
 
   void setCategory(FoodCategory category) {
@@ -40,6 +71,12 @@ class MenuProvider extends ChangeNotifier {
   Future<void> updateItem(MenuItem item) async {
     await _menuService.updateItem(item);
     await loadMenu();
+  }
+
+  Future<MenuItem> addMenuItem(MenuItem item) async {
+    final created = await _menuService.addItem(item);
+    await loadMenu();
+    return created;
   }
 
   MenuItem? getItemById(String id) => _menuService.getItemById(id);

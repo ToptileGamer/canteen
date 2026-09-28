@@ -41,7 +41,7 @@ class _MenuBrowsingScreenState extends State<MenuBrowsingScreen> {
                 child: ListView.separated(
                   scrollDirection: Axis.horizontal,
                   itemCount: FoodCategory.values.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 10),
+                  separatorBuilder: (_, _) => const SizedBox(width: 10),
                   itemBuilder: (context, index) {
                     final category = FoodCategory.values[index];
                     final isSelected = menuProvider.selectedCategory == category;
@@ -81,7 +81,12 @@ class _MenuBrowsingScreenState extends State<MenuBrowsingScreen> {
               ? const SliverFillRemaining(
                   child: Center(child: CircularProgressIndicator(color: AppColors.primary)),
                 )
-              : SliverPadding(
+              : menuProvider.filteredItems.isEmpty
+                  ? const SliverFillRemaining(
+                      hasScrollBody: false,
+                      child: _EmptyMenuMessage(),
+                    )
+                  : SliverPadding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   sliver: SliverGrid(
                     gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -114,6 +119,31 @@ class _MenuBrowsingScreenState extends State<MenuBrowsingScreen> {
                     ),
                   ),
                 ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EmptyMenuMessage extends StatelessWidget {
+  const _EmptyMenuMessage();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text('🍽️', style: TextStyle(fontSize: 56)),
+          const SizedBox(height: 16),
+          const Text('Nothing here yet',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          Text(
+            'Menu items added by the canteen will appear here.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+          ),
         ],
       ),
     );

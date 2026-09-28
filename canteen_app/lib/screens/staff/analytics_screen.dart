@@ -153,7 +153,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                             color: AppColors.primary.withValues(alpha: 0.1),
                             borderRadius: BorderRadius.circular(8),
                           ),
-                          child: Text('#${order.id.substring(0, 6)}',
+                          child: Text('#${order.displayNumber}',
                               style: const TextStyle(
                                   fontSize: 11,
                                   fontWeight: FontWeight.w600,

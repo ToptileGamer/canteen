@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/menu_provider.dart';
+import '../../providers/notification_provider.dart';
 import '../../providers/order_provider.dart';
 import '../../utils/constants.dart';
 import 'order_management_screen.dart';
 import 'menu_management_screen.dart';
 import 'analytics_screen.dart';
+import '../shared/notifications_screen.dart';
 import '../auth/login_screen.dart';
 
 class StaffDashboardScreen extends StatefulWidget {
@@ -18,16 +21,50 @@ class StaffDashboardScreen extends StatefulWidget {
 class _StaffDashboardScreenState extends State<StaffDashboardScreen> {
   int _currentIndex = 0;
 
-  final List<Widget> _screens = const [
-    OrderManagementScreen(),
-    MenuManagementScreen(),
-    AnalyticsScreen(),
-  ];
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final auth = context.read<AuthProvider>();
+      if (!auth.isLoggedIn) return;
+
+      context.read<OrderProvider>().loadActiveOrders();
+      context.read<OrderProvider>().loadAnalytics();
+      context.read<MenuProvider>().loadMenu();
+      context.read<NotificationProvider>().load(auth.user!.id);
+
+      // Real-time sync: orders, menu and notifications without reloads.
+      context.read<OrderProvider>().subscribe(auth.user!.id, isStaff: true);
+      context.read<MenuProvider>().subscribeRealtime();
+      context.read<NotificationProvider>().subscribe(auth.user!.id);
+
+      // 5s fallback poll so staff (college or canteen) always see new orders
+      // and status changes within ~5 seconds, even if realtime drops.
+      context.read<OrderProvider>().startPolling(auth.user!.id, isStaff: true);
+    });
+  }
+
+  @override
+  void dispose() {
+    context.read<OrderProvider>().unsubscribe();
+    context.read<OrderProvider>().stopPolling();
+    context.read<MenuProvider>().unsubscribeRealtime();
+    context.read<NotificationProvider>().unsubscribe();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
     final orderProvider = context.watch<OrderProvider>();
+    final notifProvider = context.watch<NotificationProvider>();
+    final canManageMenu = auth.user?.canManageMenu ?? false;
+
+    final screens = [
+      const OrderManagementScreen(),
+      if (canManageMenu) const MenuManagementScreen(),
+      const AnalyticsScreen(),
+    ];
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -44,6 +81,19 @@ class _StaffDashboardScreenState extends State<StaffDashboardScreen> {
         backgroundColor: Colors.white,
         elevation: 0.5,
         actions: [
+          IconButton(
+            icon: Badge(
+              isLabelVisible: notifProvider.unreadCount > 0,
+              label: Text('${notifProvider.unreadCount}'),
+              child: const Icon(Icons.notifications_outlined,
+                  color: AppColors.textSecondary),
+            ),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const NotificationsScreen()),
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.refresh, color: AppColors.textSecondary),
             onPressed: () {
@@ -65,14 +115,15 @@ class _StaffDashboardScreenState extends State<StaffDashboardScreen> {
           ),
         ],
       ),
-      body: _screens[_currentIndex],
+      body: screens[_currentIndex],
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex,
         onDestinationSelected: (index) {
           setState(() => _currentIndex = index);
           // Refresh data when switching tabs
           if (index == 0) orderProvider.loadActiveOrders();
-          if (index == 2) orderProvider.loadAnalytics();
+          if (canManageMenu && index == 1) context.read<MenuProvider>().loadMenu();
+          if (index == screens.length - 1) orderProvider.loadAnalytics();
         },
         backgroundColor: Colors.white,
         indicatorColor: AppColors.primary.withValues(alpha: 0.1),
@@ -85,10 +136,11 @@ class _StaffDashboardScreenState extends State<StaffDashboardScreen> {
             ),
             label: 'Orders',
           ),
-          const NavigationDestination(
-            icon: Icon(Icons.restaurant_menu),
-            label: 'Menu',
-          ),
+          if (canManageMenu)
+            const NavigationDestination(
+              icon: Icon(Icons.restaurant_menu),
+              label: 'Menu',
+            ),
           const NavigationDestination(
             icon: Icon(Icons.analytics),
             label: 'Analytics',

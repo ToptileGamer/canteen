@@ -1,126 +1,149 @@
-import 'dart:math';
+import '../config/app_config.dart';
 import '../models/order.dart';
 import '../models/time_slot.dart';
 
 class OrderService {
-  final List<Order> _orders = [];
-  final Map<String, int> _slotOrderCounts = {};
-  static const int maxOrdersPerSlot = 30;
+  static const int maxOrdersPerSlot = AppConfig.maxOrdersPerSlot;
+  static const int openingHour = 8; // 8 AM
+  static const int closingHour = 20; // 8 PM
 
-  List<Order> get allOrders => List.unmodifiable(_orders);
-
-  List<Order> getOrdersByUser(String userId) =>
-      _orders.where((o) => o.userId == userId).toList()
-        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-
-  List<Order> getOrdersByPickupSlot(DateTime slotStart, DateTime slotEnd) =>
-      _orders.where((o) =>
-          o.pickupStartTime == slotStart && o.pickupEndTime == slotEnd).toList();
-
-  List<Order> getActiveOrders() =>
-      _orders.where((o) =>
-          o.status == OrderStatus.paidPendingApproval ||
-          o.status == OrderStatus.preparing ||
-          o.status == OrderStatus.readyForPickup).toList()
-        ..sort((a, b) => a.pickupStartTime.compareTo(b.pickupStartTime));
-
-  List<Order> getPendingApproval() =>
-      _orders.where((o) => o.status == OrderStatus.paidPendingApproval).toList()
-        ..sort((a, b) => a.pickupStartTime.compareTo(b.pickupStartTime));
-
-  List<Order> getPreparing() =>
-      _orders.where((o) => o.status == OrderStatus.preparing).toList()
-        ..sort((a, b) => a.pickupStartTime.compareTo(b.pickupStartTime));
-
-  List<Order> getReadyForPickup() =>
-      _orders.where((o) => o.status == OrderStatus.readyForPickup).toList()
-        ..sort((a, b) => a.pickupStartTime.compareTo(b.pickupStartTime));
-
-  List<Order> getCompletedOrders() =>
-      _orders.where((o) => o.status == OrderStatus.completed ||
-          o.status == OrderStatus.cancelled).toList()
-        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-
-  List<Order> getCompletedToday() {
-    final today = DateTime.now();
-    final startOfDay = DateTime(today.year, today.month, today.day);
-    return _orders.where((o) =>
-        o.status == OrderStatus.completed &&
-        o.createdAt.isAfter(startOfDay)).toList();
+  Future<List<Order>> getOrdersByUser(String userId) async {
+    final supabase = AppConfig.supabase;
+    final rows = await supabase
+        .from('order_details')
+        .select()
+        .eq('user_id', userId)
+        .order('created_at', ascending: false);
+    return rows.map(_fromRow).toList();
   }
 
-  double get todayRevenue {
-    return getCompletedToday().fold(0.0, (sum, o) => sum + o.totalAmount);
+  Future<Order?> getOrderById(String orderId) async {
+    final supabase = AppConfig.supabase;
+    final row = await supabase
+        .from('order_details')
+        .select()
+        .eq('id', orderId)
+        .maybeSingle();
+    return row == null ? null : _fromRow(row);
   }
 
-  int get todayOrderCount => getCompletedToday().length;
-
-  bool canPlaceOrderInSlot(DateTime startTime, DateTime endTime) {
-    final key = '${startTime.millisecondsSinceEpoch}-${endTime.millisecondsSinceEpoch}';
-    final count = _slotOrderCounts[key] ?? 0;
-    return count < maxOrdersPerSlot;
+  Future<List<Order>> getActiveOrders() async {
+    final supabase = AppConfig.supabase;
+    final rows = await supabase
+        .from('order_details')
+        .select()
+        .inFilter('status', const [
+          'paidPendingApproval',
+          'preparing',
+          'readyForPickup',
+        ])
+        .order('pickup_start');
+    return rows.map(_fromRow).toList();
   }
 
-  int getSlotOrderCount(DateTime startTime, DateTime endTime) {
-    final key = '${startTime.millisecondsSinceEpoch}-${endTime.millisecondsSinceEpoch}';
-    return _slotOrderCounts[key] ?? 0;
+  Future<List<Order>> getCompletedOrders() async {
+    final supabase = AppConfig.supabase;
+    final rows = await supabase
+        .from('order_details')
+        .select()
+        .inFilter('status', const ['completed', 'cancelled'])
+        .order('created_at', ascending: false);
+    return rows.map(_fromRow).toList();
   }
 
-  Future<List<TimeSlot>> getAvailableTimeSlots() async {
-    await Future.delayed(const Duration(milliseconds: 300));
-
+  Future<double> getTodayRevenue() async {
+    final supabase = AppConfig.supabase;
     final now = DateTime.now();
-    final slots = <TimeSlot>[];
+    final startOfDay = DateTime(now.year, now.month, now.day);
+    final rows = await supabase
+        .from('orders')
+        .select('total_amount')
+        .eq('status', 'completed')
+        .gte('created_at', startOfDay.toIso8601String());
 
-    // Generate slots from current time + 15 min cutoff up to next 4 hours
-    final startHour = now.hour;
-    final startMinute = now.minute;
+    var total = 0.0;
+    for (final row in rows) {
+      total += (row['total_amount'] as num).toDouble();
+    }
+    return total;
+  }
 
-    // Round up to next 30-min interval
-    int currentMinute = ((startMinute + 15) ~/ 30) * 30;
-    int currentHour = startHour;
-    if (currentMinute >= 60) {
-      currentMinute = 0;
-      currentHour++;
+  Future<int> getTodayOrderCount() async {
+    final supabase = AppConfig.supabase;
+    final now = DateTime.now();
+    final startOfDay = DateTime(now.year, now.month, now.day);
+    final rows = await supabase
+        .from('orders')
+        .select('id')
+        .eq('status', 'completed')
+        .gte('created_at', startOfDay.toIso8601String());
+    return rows.length;
+  }
+
+  /// Generates 30-minute pickup slots for a given day (defaults to today).
+  /// Supports advance booking: pass a future date to book ahead.
+  Future<List<TimeSlot>> getAvailableTimeSlots({DateTime? date}) async {
+    final supabase = AppConfig.supabase;
+    final now = DateTime.now();
+    final target = date != null
+        ? DateTime(date.year, date.month, date.day)
+        : DateTime(now.year, now.month, now.day);
+    final isToday = target.year == now.year &&
+        target.month == now.month &&
+        target.day == now.day;
+
+    // Fetch all orders on the selected day to compute per-slot counts.
+    final dayStart = target;
+    final dayEnd = target.add(const Duration(days: 1));
+    final orderRows = await supabase
+        .from('orders')
+        .select('pickup_start, pickup_end, status')
+        .gte('pickup_start', dayStart.toIso8601String())
+        .lt('pickup_start', dayEnd.toIso8601String());
+
+    final counts = <String, int>{};
+    for (final row in orderRows) {
+      if (row['status'] == 'cancelled') continue;
+      final start = DateTime.parse(row['pickup_start']);
+      final end = DateTime.parse(row['pickup_end']);
+      counts[_slotKey(start, end)] = (counts[_slotKey(start, end)] ?? 0) + 1;
     }
 
-    for (int i = 0; i < 8; i++) {
-      final slotStart = DateTime(now.year, now.month, now.day, currentHour, currentMinute);
+    final slots = <TimeSlot>[];
+    var minuteOfDay = openingHour * 60;
+    final lastSlotStart = closingHour * 60 - 30;
+
+    while (minuteOfDay <= lastSlotStart) {
+      final slotStart = target.add(Duration(minutes: minuteOfDay));
       final slotEnd = slotStart.add(const Duration(minutes: 30));
 
-      // Skip past slots
-      if (slotStart.isBefore(now) || slotStart.difference(now).inMinutes < 15) {
-        currentMinute += 30;
-        if (currentMinute >= 60) {
-          currentMinute = 0;
-          currentHour++;
-        }
+      // For today: skip slots that are less than 15 minutes away or past.
+      if (isToday &&
+          (slotStart.isBefore(now) ||
+              slotStart.difference(now).inMinutes < 15)) {
+        minuteOfDay += 30;
         continue;
       }
 
-      // Skip if past 8 PM (canteen closing)
-      if (currentHour >= 20) break;
-
-      final key = '${slotStart.millisecondsSinceEpoch}-${slotEnd.millisecondsSinceEpoch}';
-      final orderCount = _slotOrderCounts[key] ?? 0;
+      final key = _slotKey(slotStart, slotEnd);
+      final currentOrders = counts[key] ?? 0;
 
       slots.add(TimeSlot(
         startTime: slotStart,
         endTime: slotEnd,
         maxOrders: maxOrdersPerSlot,
-        currentOrders: orderCount,
-        isAvailable: orderCount < maxOrdersPerSlot && currentHour < 20,
+        currentOrders: currentOrders,
+        isAvailable: currentOrders < maxOrdersPerSlot,
       ));
 
-      currentMinute += 30;
-      if (currentMinute >= 60) {
-        currentMinute = 0;
-        currentHour++;
-      }
+      minuteOfDay += 30;
     }
 
     return slots;
   }
+
+  static String _slotKey(DateTime start, DateTime end) =>
+      '${start.millisecondsSinceEpoch}-${end.millisecondsSinceEpoch}';
 
   Future<Order> placeOrder({
     required String userId,
@@ -129,42 +152,40 @@ class OrderService {
     required DateTime pickupStartTime,
     required DateTime pickupEndTime,
   }) async {
-    await Future.delayed(const Duration(milliseconds: 500));
-
-    final totalAmount = items.fold(0.0, (sum, item) => sum + item.totalPrice);
-
-    // Random order number for display
-    final random = Random();
-    final orderNumber = 'ORD${DateTime.now().millisecondsSinceEpoch}${random.nextInt(100)}';
-
-    final order = Order(
-      id: orderNumber,
-      userId: userId,
-      items: items,
-      totalAmount: totalAmount,
-      status: OrderStatus.paidPendingApproval,
-      createdAt: DateTime.now(),
-      pickupStartTime: pickupStartTime,
-      pickupEndTime: pickupEndTime,
-      transactionId: transactionId,
-    );
-
-    _orders.add(order);
-
-    // Track slot count
-    final key = '${pickupStartTime.millisecondsSinceEpoch}-${pickupEndTime.millisecondsSinceEpoch}';
-    _slotOrderCounts[key] = (_slotOrderCounts[key] ?? 0) + 1;
-
-    return order;
+    final supabase = AppConfig.supabase;
+    final result = await supabase.rpc('place_order', params: {
+      'p_items': items.map((i) => i.toJson()).toList(),
+      'p_transaction_id': transactionId,
+      'p_pickup_start': pickupStartTime.toIso8601String(),
+      'p_pickup_end': pickupEndTime.toIso8601String(),
+    });
+    return _fromRow(result as Map<String, dynamic>);
   }
 
   Future<Order> updateOrderStatus(String orderId, OrderStatus newStatus) async {
-    await Future.delayed(const Duration(milliseconds: 200));
+    final supabase = AppConfig.supabase;
+    final result = await supabase.rpc('update_order_status', params: {
+      'p_order_id': orderId,
+      'p_new_status': newStatus.name,
+    });
+    return _fromRow(result as Map<String, dynamic>);
+  }
 
-    final index = _orders.indexWhere((o) => o.id == orderId);
-    if (index == -1) throw Exception('Order not found');
-
-    _orders[index] = _orders[index].copyWith(status: newStatus);
-    return _orders[index];
+  Order _fromRow(Map<String, dynamic> row) {
+    final items = ((row['items'] as List?) ?? const [])
+        .map((e) => OrderItem.fromJson(e as Map<String, dynamic>))
+        .toList();
+    return Order(
+      id: row['id'],
+      orderNumber: row['order_number'] ?? row['id'],
+      userId: row['user_id'],
+      items: items,
+      totalAmount: (row['total_amount'] as num).toDouble(),
+      status: OrderStatus.values.byName(row['status']),
+      createdAt: DateTime.parse(row['created_at']),
+      pickupStartTime: DateTime.parse(row['pickup_start_time']),
+      pickupEndTime: DateTime.parse(row['pickup_end_time']),
+      transactionId: row['transaction_id'] ?? '',
+    );
   }
 }

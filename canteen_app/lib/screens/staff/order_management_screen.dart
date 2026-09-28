@@ -223,7 +223,7 @@ class _OrderKanbanCard extends StatelessWidget {
                     color: AppColors.primary,
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Text(order.id.substring(0, 8),
+                  child: Text(order.displayNumber,
                       style: const TextStyle(
                           color: Colors.white,
                           fontSize: 11,

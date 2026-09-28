@@ -23,7 +23,7 @@ class TimeSlot {
 
   String get shortLabel {
     final f = _formatTime;
-    return '${f(startTime)}';
+    return f(startTime);
   }
 
   static String _formatTime(DateTime dt) {

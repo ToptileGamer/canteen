@@ -26,12 +26,11 @@
 .pub-cache/
 .pub/
 build/
+android/
+android
 
 # Generated files
 **/generated_plugin_registrant.dart
-
-# Flutter web
-lib/generated_plugin_registrant.dart
 
 # Android
 android/.gradle/
@@ -86,5 +85,12 @@ fastlane/test_output/
 app.*.symbols
 
 # Environment files
+# .env contains your Supabase credentials - never commit it.
 .env
 .env.*
+# ...but the template should be committed for other developers.
+!.env.example
+
+# Local notes (feature backlog)
+changes.txt
+.env.example

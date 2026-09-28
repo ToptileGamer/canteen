@@ -20,7 +20,9 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
   @override
   void initState() {
     super.initState();
-    // Simulate live updates by refreshing periodically
+    // Ensure the order is loaded even when opened from a notification.
+    context.read<OrderProvider>().loadOrderById(widget.orderId);
+    // Keep polling as a fallback so updates arrive even without realtime.
     _refreshTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       final a = context.read<AuthProvider>();
       if (a.isLoggedIn) {
@@ -122,7 +124,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                           color: _statusColor(order.status),
                         )),
                     const SizedBox(height: 8),
-                    Text('Order #${order.id}',
+                    Text('Order #${order.displayNumber}',
                         style: TextStyle(color: AppColors.textSecondary, fontSize: 14)),
                   ],
                 ),

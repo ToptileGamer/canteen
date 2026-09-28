@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../models/user.dart';
 import '../../providers/auth_provider.dart';
+import '../../services/auth_service.dart';
 import '../../utils/constants.dart';
 import 'role_selection_screen.dart';
 
@@ -21,10 +22,18 @@ class _SignupScreenState extends State<SignupScreen> {
   final _confirmPasswordController = TextEditingController();
   bool _obscurePassword = true;
   bool _obscureConfirm = true;
+  bool _awaitingVerification = false;
   UserRole _selectedRole = UserRole.student;
 
   @override
+  void initState() {
+    super.initState();
+    context.read<AuthProvider>().addListener(_onAuthChanged);
+  }
+
+  @override
   void dispose() {
+    context.read<AuthProvider>().removeListener(_onAuthChanged);
     _nameController.dispose();
     _emailController.dispose();
     _rollController.dispose();
@@ -33,28 +42,49 @@ class _SignupScreenState extends State<SignupScreen> {
     super.dispose();
   }
 
+  /// The confirmation link signs the user in through a deep link, so hop over
+  /// to the app as soon as that session shows up.
+  void _onAuthChanged() {
+    if (!mounted || !context.read<AuthProvider>().isLoggedIn) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const RoleSelectionScreen()),
+      (route) => false,
+    );
+  }
+
   Future<void> _signup() async {
     if (!_formKey.currentState!.validate()) return;
 
     final authProvider = context.read<AuthProvider>();
-    final success = await authProvider.signup(
-      name: _nameController.text.trim(),
-      email: _emailController.text.trim(),
-      rollNumber: _rollController.text.trim(),
-      role: _selectedRole,
-      password: _passwordController.text,
-    );
-
-    if (success && mounted) {
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const RoleSelectionScreen()),
-        (route) => false,
+    try {
+      final result = await authProvider.signup(
+        name: _nameController.text.trim(),
+        email: _emailController.text.trim(),
+        rollNumber: _rollController.text.trim(),
+        role: _selectedRole,
+        password: _passwordController.text,
       );
+
+      if (!mounted) return;
+      if (result == SignupResult.signedIn) {
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const RoleSelectionScreen()),
+          (route) => false,
+        );
+      } else {
+        setState(() => _awaitingVerification = true);
+      }
+    } catch (_) {
+      // Surfaced through AuthProvider.error.
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_awaitingVerification) {
+      return _buildAwaitingVerification(context);
+    }
+
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
@@ -92,26 +122,34 @@ class _SignupScreenState extends State<SignupScreen> {
                 // Role selector
                 const Text('I am a...', style: TextStyle(fontWeight: FontWeight.w600)),
                 const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _RoleChip(
-                        label: 'Student',
-                        icon: Icons.school,
-                        selected: _selectedRole == UserRole.student,
-                        onTap: () => setState(() => _selectedRole = UserRole.student),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: _RoleChip(
-                        label: 'Staff',
-                        icon: Icons.badge,
-                        selected: _selectedRole == UserRole.staff,
-                        onTap: () => setState(() => _selectedRole = UserRole.staff),
-                      ),
-                    ),
-                  ],
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final width = (constraints.maxWidth - 12) / 2;
+                    return Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: [
+                        SizedBox(
+                          width: width,
+                          child: _RoleChip(
+                            label: 'Student',
+                            icon: Icons.school,
+                            selected: _selectedRole == UserRole.student,
+                            onTap: () => setState(() => _selectedRole = UserRole.student),
+                          ),
+                        ),
+                        SizedBox(
+                          width: width,
+                          child: _RoleChip(
+                            label: 'College Staff',
+                            icon: Icons.school_outlined,
+                            selected: _selectedRole == UserRole.collegeStaff,
+                            onTap: () => setState(() => _selectedRole = UserRole.collegeStaff),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
                 ),
                 const SizedBox(height: 24),
 
@@ -132,7 +170,7 @@ class _SignupScreenState extends State<SignupScreen> {
                   controller: _emailController,
                   keyboardType: TextInputType.emailAddress,
                   decoration: InputDecoration(
-                    labelText: 'College Email',
+                    labelText: 'Email',
                     prefixIcon: const Icon(Icons.email_outlined),
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                     filled: true,
@@ -146,18 +184,21 @@ class _SignupScreenState extends State<SignupScreen> {
                 ),
                 const SizedBox(height: 16),
 
-                TextFormField(
-                  controller: _rollController,
-                  decoration: InputDecoration(
-                    labelText: 'Roll Number',
-                    prefixIcon: const Icon(Icons.numbers),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                    filled: true,
-                    fillColor: Colors.white,
+                if (_selectedRole == UserRole.student) ...[
+                  TextFormField(
+                    controller: _rollController,
+                    decoration: InputDecoration(
+                      labelText: 'Roll Number',
+                      prefixIcon: const Icon(Icons.numbers),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      filled: true,
+                      fillColor: Colors.white,
+                    ),
+                    validator: (v) => (v == null || v.isEmpty) ? 'Enter your roll number' : null,
                   ),
-                  validator: (v) => (v == null || v.isEmpty) ? 'Enter your roll number' : null,
-                ),
-                const SizedBox(height: 16),
+                  const SizedBox(height: 16),
+                ] else
+                  const SizedBox(height: 16),
 
                 TextFormField(
                   controller: _passwordController,
@@ -238,6 +279,100 @@ class _SignupScreenState extends State<SignupScreen> {
                       ),
                     );
                   },
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAwaitingVerification(BuildContext context) {
+    final theme = Theme.of(context);
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: AppColors.textPrimary),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 96,
+                  height: 96,
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withValues(alpha: 0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.mark_email_read_outlined,
+                    size: 44,
+                    color: AppColors.primary,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  'Verify your email',
+                  style: theme.textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'We sent a confirmation link to\n${_emailController.text.trim()}',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodyLarge?.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.grey.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Text(
+                          'Open the link to finish signing up. This app will '
+                          'continue on its own.',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Wrong address? Go back and sign up again.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
                 ),
               ],
             ),

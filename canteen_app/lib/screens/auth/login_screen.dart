@@ -19,6 +19,23 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _obscurePassword = true;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _restoreSession());
+  }
+
+  Future<void> _restoreSession() async {
+    final auth = context.read<AuthProvider>();
+    if (auth.isLoggedIn) return;
+    final user = await auth.restoreSession();
+    if (user != null && mounted) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const RoleSelectionScreen()),
+      );
+    }
+  }
+
+  @override
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
@@ -95,7 +112,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     controller: _emailController,
                     keyboardType: TextInputType.emailAddress,
                     decoration: InputDecoration(
-                      labelText: 'College Email',
+                      labelText: 'Email',
                       prefixIcon: const Icon(Icons.email_outlined),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
@@ -213,7 +230,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Quick Access:',
+                          'Get Started:',
                           style: TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 13,
@@ -222,7 +239,10 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                         SizedBox(height: 4),
                         Text(
-                          'Student: rahul.sharma@college.edu\nStaff: manager@college.edu\n(any password of 6+ chars)',
+                          'First time? Sign up — choose “Staff” for the '
+                          'canteen manager or “Student” for ordering.\n'
+                          'After creating an account you can log in with that '
+                          'email and password.',
                           style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
                         ),
                       ],

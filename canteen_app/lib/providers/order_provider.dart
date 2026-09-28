@@ -1,4 +1,7 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../config/app_config.dart';
 import '../models/order.dart';
 import '../models/time_slot.dart';
 import '../models/transaction.dart';
@@ -18,6 +21,9 @@ class OrderProvider extends ChangeNotifier {
   List<TimeSlot> _availableSlots = [];
   bool _isLoading = false;
   String? _error;
+  RealtimeChannel? _channel;
+  Timer? _debounce;
+  Timer? _pollTimer;
 
   // Staff analytics
   double _todayRevenue = 0;
@@ -35,28 +41,128 @@ class OrderProvider extends ChangeNotifier {
   double get todayRevenue => _todayRevenue;
   int get todayOrderCount => _todayOrderCount;
 
-  Future<void> loadUserOrders(String userId) async {
-    _isLoading = true;
-    notifyListeners();
+  /// Subscribes to the orders table. Students receive only their own orders,
+  /// staff receive all orders — both update live without any manual reload.
+  void subscribe(String userId, {required bool isStaff}) {
+    _setupChannel(userId, isStaff: isStaff);
+  }
 
-    await Future.delayed(const Duration(milliseconds: 300));
-    _userOrders = _orderService.getOrdersByUser(userId);
+  void _setupChannel(String userId, {required bool isStaff}) {
+    unsubscribe();
+    try {
+      final supabase = AppConfig.supabase;
+      _channel = supabase
+          .channel('orders_$userId')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'orders',
+            filter: isStaff
+                ? null
+                : PostgresChangeFilter(
+                    type: PostgresChangeFilterType.eq,
+                    column: 'user_id',
+                    value: userId,
+                  ),
+            callback: (_) => _onOrdersChanged(userId, isStaff),
+          )
+          .subscribe();
+    } catch (_) {
+      // realtime unavailable (e.g. not initialized in tests)
+    }
+  }
 
-    _isLoading = false;
+  void _onOrdersChanged(String userId, bool isStaff) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 150), () {
+      _refreshFromRealtime(userId, isStaff);
+    });
+  }
+
+  /// Fallback safety net: even if the realtime WebSocket drops, orders still
+  /// reflect on the other side within ~5 seconds. The refresh is silent
+  /// (no spinner) so it never flickers the UI.
+  void startPolling(String userId, {required bool isStaff}) {
+    stopPolling();
+    _pollTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (isStaff) {
+        loadActiveOrders(silent: true);
+        loadAnalytics();
+      } else {
+        loadUserOrders(userId, silent: true);
+      }
+    });
+  }
+
+  void stopPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+  }
+
+  Future<void> _refreshFromRealtime(String userId, bool isStaff) async {
+    if (isStaff) {
+      await Future.wait([
+        loadActiveOrders(),
+        loadAnalytics(),
+      ]);
+    } else {
+      await loadUserOrders(userId);
+    }
+  }
+
+  void unsubscribe() {
+    _debounce?.cancel();
+    try {
+      _channel?.unsubscribe();
+    } catch (_) {}
+    _channel = null;
+  }
+
+  Future<void> loadUserOrders(String userId, {bool silent = false}) async {
+    try {
+      _userOrders = await _orderService.getOrdersByUser(userId);
+    } catch (e) {
+      _error = e.toString();
+    }
     notifyListeners();
   }
 
-  Future<void> loadActiveOrders() async {
-    _isLoading = true;
-    notifyListeners();
+  /// Loads a single order and merges it into the user order list so tracking
+  /// works even when opened directly from a notification.
+  Future<void> loadOrderById(String orderId) async {
+    try {
+      final order = await _orderService.getOrderById(orderId);
+      if (order == null) return;
+      final exists = _userOrders.any((o) => o.id == order.id);
+      _userOrders = exists
+          ? _userOrders.map((o) => o.id == order.id ? order : o).toList()
+          : [order, ..._userOrders];
+      notifyListeners();
+    } catch (_) {}
+  }
 
-    await Future.delayed(const Duration(milliseconds: 300));
-    _activeOrders = _orderService.getActiveOrders();
-    _pendingOrders = _orderService.getPendingApproval();
-    _preparingOrders = _orderService.getPreparing();
-    _readyOrders = _orderService.getReadyForPickup();
+  Future<void> loadActiveOrders({bool silent = false}) async {
+    if (!silent) {
+      _isLoading = true;
+      notifyListeners();
+    }
 
-    _isLoading = false;
+    try {
+      final orders = await _orderService.getActiveOrders();
+      _activeOrders = orders;
+      _pendingOrders =
+          orders.where((o) => o.status == OrderStatus.paidPendingApproval).toList();
+      _preparingOrders =
+          orders.where((o) => o.status == OrderStatus.preparing).toList();
+      _readyOrders =
+          orders.where((o) => o.status == OrderStatus.readyForPickup).toList();
+    } catch (e) {
+      _error = e.toString();
+    }
+
+    if (!silent) {
+      _isLoading = false;
+    }
     notifyListeners();
   }
 
@@ -64,30 +170,47 @@ class OrderProvider extends ChangeNotifier {
     _isLoading = true;
     notifyListeners();
 
-    await Future.delayed(const Duration(milliseconds: 300));
-    _completedOrders = _orderService.getCompletedOrders();
+    try {
+      _completedOrders = await _orderService.getCompletedOrders();
+    } catch (e) {
+      _error = e.toString();
+    }
 
     _isLoading = false;
     notifyListeners();
   }
 
-  Future<void> loadTimeSlots() async {
-    _availableSlots = await _orderService.getAvailableTimeSlots();
+  Future<void> loadTimeSlots({DateTime? date}) async {
+    try {
+      _availableSlots = await _orderService.getAvailableTimeSlots(date: date);
+    } catch (e) {
+      _error = e.toString();
+    }
     notifyListeners();
   }
 
   Future<void> loadAnalytics() async {
-    _todayRevenue = _orderService.todayRevenue;
-    _todayOrderCount = _orderService.todayOrderCount;
+    try {
+      _todayRevenue = await _orderService.getTodayRevenue();
+      _todayOrderCount = await _orderService.getTodayOrderCount();
+    } catch (e) {
+      _error = e.toString();
+    }
     notifyListeners();
   }
 
   bool canPlaceOrderInSlot(DateTime start, DateTime end) {
-    return _orderService.canPlaceOrderInSlot(start, end);
+    final slot = _availableSlots
+        .where((s) => s.startTime == start && s.endTime == end)
+        .firstOrNull;
+    return slot == null ? true : slot.remainingSpots > 0;
   }
 
   int getSlotOrderCount(DateTime start, DateTime end) {
-    return _orderService.getSlotOrderCount(start, end);
+    final slot = _availableSlots
+        .where((s) => s.startTime == start && s.endTime == end)
+        .firstOrNull;
+    return slot?.currentOrders ?? 0;
   }
 
   Future<Order?> placeOrder({
@@ -102,8 +225,7 @@ class OrderProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // Check slot availability
-      if (!_orderService.canPlaceOrderInSlot(pickupStartTime, pickupEndTime)) {
+      if (!canPlaceOrderInSlot(pickupStartTime, pickupEndTime)) {
         _error = 'This time slot is full. Please choose another.';
         _isLoading = false;
         notifyListeners();
@@ -118,12 +240,12 @@ class OrderProvider extends ChangeNotifier {
         pickupEndTime: pickupEndTime,
       );
 
-      _userOrders.insert(0, order);
+      _userOrders = [order, ..._userOrders.where((o) => o.id != order.id)];
       _isLoading = false;
       notifyListeners();
       return order;
     } catch (e) {
-      _error = e.toString();
+      _error = _friendlyError(e);
       _isLoading = false;
       notifyListeners();
       return null;
@@ -132,8 +254,11 @@ class OrderProvider extends ChangeNotifier {
 
   Future<bool> updateOrderStatus(String orderId, OrderStatus newStatus) async {
     try {
-      await _orderService.updateOrderStatus(orderId, newStatus);
+      final updated = await _orderService.updateOrderStatus(orderId, newStatus);
       await loadActiveOrders();
+      _userOrders = _userOrders
+          .map((o) => o.id == updated.id ? updated : o)
+          .toList();
       return true;
     } catch (e) {
       _error = e.toString();
@@ -155,7 +280,7 @@ class OrderProvider extends ChangeNotifier {
     _error = null;
     notifyListeners();
 
-    // Step 1: Process payment
+    // Step 1: Process payment (simulated — swap with a real gateway later)
     final transaction = await _paymentService.processPayment(
       userId: userId,
       amount: amount,
@@ -181,6 +306,22 @@ class OrderProvider extends ChangeNotifier {
     _isLoading = false;
     notifyListeners();
     return order;
+  }
+
+  String _friendlyError(Object e) {
+    final msg = e.toString();
+    if (msg.contains('full')) return 'This time slot is full. Please choose another.';
+    if (msg.contains('no longer available')) {
+      return msg.replaceAll('Exception: ', '').replaceAll('PostgrestException: ', '');
+    }
+    if (msg.contains('PostgrestException')) {
+      final cleaned = msg.replaceAll('PostgrestException: ', '');
+      final start = cleaned.indexOf('message: ');
+      if (start != -1) {
+        return cleaned.substring(start + 9, cleaned.indexOf(',' , start));
+      }
+    }
+    return msg.replaceFirst('Exception: ', '');
   }
 
   void clearError() {
